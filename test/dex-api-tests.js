@@ -1,6 +1,6 @@
 const assert = require('assert');
-const LiskChainCrypto = require('../index');
-
+const ArkChainCrypto = require('../index');
+const Channel = require('./utils/channel');
 
 describe('DEX (ChainCrypto) API tests', async () => {
   let options;
@@ -8,27 +8,21 @@ describe('DEX (ChainCrypto) API tests', async () => {
   let preparedTxn;
   let signaturePacket;
   let store;
+  let channel;
 
   beforeEach(async () => {
     store = {};
     options = {
       chainOptions: {
-        sharedPassphrase: 'original wolf grass seed excite current write castle lab brain hawk bless',
+        multisigPublicKey: '0398db7e710602fffe50f137d536735c7fc1bcfa79cefd659cb7b8d118bf5bbbf0',
         passphrase: 'tell sun crazy time creek carbon cloud various turtle leisure cactus melody',
         keyIndexDirPath: './test/data/',
         rpcURL: 'ws://216.128.135.183:8080/ws'
-      },
-      store: {
-        saveItem: async (key, value) => {
-          store[key] = value;
-        },
-        loadItem: async (key) => {
-          return store[key];
-        }
       }
     };
-    chainCrypto = new LiskChainCrypto(options);
-    await chainCrypto.load();
+    channel = new Channel();
+    chainCrypto = new ArkChainCrypto(options);
+    await chainCrypto.load(channel, 100);
   });
 
   afterEach(async () => {
@@ -39,7 +33,7 @@ describe('DEX (ChainCrypto) API tests', async () => {
 
     it('should prepare and sign transaction and return transaction and signature objects with all required properties', async () => {
       let { transaction, signature } = await chainCrypto.prepareTransaction({
-        recipientAddress: '213818552997703753L',
+        recipientAddress: 'DHdJbhdrgKoCJczmfGrPKjjcz3yvTDRinH',
         amount: '10000000000',
         fee: '10000000',
         timestamp: 1609544665,
@@ -69,7 +63,7 @@ describe('DEX (ChainCrypto) API tests', async () => {
 
     beforeEach(async () => {
       let { transaction, signature } = await chainCrypto.prepareTransaction({
-        recipientAddress: '213818552997703753L',
+        recipientAddress: 'DHdJbhdrgKoCJczmfGrPKjjcz3yvTDRinH',
         amount: '10000000000',
         fee: '10000000',
         timestamp: 1609544665,
@@ -91,7 +85,7 @@ describe('DEX (ChainCrypto) API tests', async () => {
     });
 
     it('should return false if the signature is valid but does not belong to the correct account', async () => {
-      signaturePacket.signerAddress = '213818552997703753L';
+      signaturePacket.signerAddress = 'DTY1sPZrWDynB5zDYrhuv1oZ5SHNfc7Bnm';
       let isValid = await chainCrypto.verifyTransactionSignature(preparedTxn, signaturePacket);
       assert.equal(isValid, false);
     });

@@ -1,79 +1,36 @@
-const {
-  cryptography: liskCryptography,
-  transactions: liskTransactions
-} = require('@liskhq/lisk-client');
+const { Transactions, Identities, Crypto, Managers, Utils } = require('@arkecosystem/crypto');
 
-const crypto = require('crypto');
-
-const LiskWSClient = require('lisk-v3-ws-client-manager');
-
-const DEX_TRANSACTION_ID_LENGTH = 44;
 const DEFAULT_RECENT_NONCES_MAX_COUNT = 10000;
 const MAX_TRANSACTIONS_PER_TIMESTAMP = 100;
 const API_BLOCK_FETCH_LIMIT = 50;
 const DEFAULT_BLOCKS_LOOK_AHEAD_MAX_COUNT = 300;
 
-const toBuffer = (data) => Buffer.from(data, 'hex');
-const bufferToString = (hexBuffer) => hexBuffer.toString('hex');
-const computeDEXTransactionId = (senderAddress, nonce) => {
-  return crypto.createHash('sha256').update(`${senderAddress}-${nonce}`).digest('hex').slice(0, DEX_TRANSACTION_ID_LENGTH);
-};
-
-class LiskChainCrypto {
-  constructor({chainOptions, logger}) {
+class ArkChainCrypto {
+  constructor({chainOptions}) {
     this.moduleAlias = chainOptions.moduleAlias;
+    this.multisigPublicKey = chainOptions.multisigPublicKey;
+    this.multisigAddress = Identities.Address.fromPublicKey(this.multisigPublicKey);
     this.passphrase = chainOptions.passphrase;
-    this.sharedPassphrase = chainOptions.sharedPassphrase;
+    this.memberAddress = Identities.Address.fromPassphrase(this.passphrase);
+    this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
+    this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
     this.recentNoncesMaxCount = chainOptions.recentNoncesMaxCount || DEFAULT_RECENT_NONCES_MAX_COUNT;
     this.blocksLookAheadMaxCount = chainOptions.blocksLookAheadMaxCount || DEFAULT_BLOCKS_LOOK_AHEAD_MAX_COUNT;
     this.nonceIndex = 0n;
-    this.rpcURL = chainOptions.rpcURL;
-    this.apiClient = null;
-    this.logger = logger;
-
-    this.transferAssetSchema = {
-      '$id': 'lisk/transfer-asset',
-      title: 'Transfer transaction asset',
-      type: 'object',
-      required: ['amount', 'recipientAddress', 'data'],
-      properties: {
-        amount: {dataType: 'uint64', fieldNumber: 1},
-        recipientAddress: {dataType: 'bytes', fieldNumber: 2, minLength: 20, maxLength: 20},
-        data: {dataType: 'string', fieldNumber: 3, minLength: 0, maxLength: 64}
-      }
-    };
-
-    this.liskWsClient = new LiskWSClient({
-      config: {
-        rpcURL: this.rpcURL
-      },
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {}
-      }
-    });
   }
 
   async load(channel, lastProcessedHeight) {
     this.channel = channel;
-    this.apiClient = await this.liskWsClient.createWsClient(true);
-    this.networkIdBytes = toBuffer(this.apiClient._nodeInfo.networkIdentifier);
-    let { address: sharedAddress, publicKey: sharedPublicKey } = liskCryptography.getAddressAndPublicKeyFromPassphrase(this.sharedPassphrase);
-    this.multisigWalletAddress = sharedAddress;
-    this.multisigWalletAddressBase32 = liskCryptography.getBase32AddressFromAddress(this.multisigWalletAddress);
-    this.multisigWalletPublicKey = sharedPublicKey;
-
-    let account = await this.apiClient.account.get(this.multisigWalletAddress);
-    this.multisigWalletKeys = account.keys;
-    this.initialAccountNonce = account.sequence.nonce;
-
+    let account = await this.channel.invoke(`${this.moduleAlias}:getAccount`, {
+      walletAddress: this.multisigAddress
+    });
+    this.initialAccountNonce = BigInt(account.nonce);
+    this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
+    this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
     await this.reset(lastProcessedHeight);
   }
 
-  async unload() {
-    await this.liskWsClient.close();
-  }
+  async unload() {}
 
   async reset(lastProcessedHeight) {
     let lastProcessedBlock = await this.channel.invoke(`${this.moduleAlias}:getBlockAtHeight`, {
@@ -81,7 +38,7 @@ class LiskChainCrypto {
     });
 
     let oldOutboundTxns = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
-      walletAddress: this.multisigWalletAddressBase32,
+      walletAddress: this.multisigAddress,
       fromTimestamp: lastProcessedBlock.timestamp,
       limit: MAX_TRANSACTIONS_PER_TIMESTAMP,
       order: 'desc'
@@ -123,12 +80,11 @@ class LiskChainCrypto {
         continue;
       }
       let newOutboundTxns = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactionsFromBlock`, {
-        walletAddress: this.multisigWalletAddressBase32,
+        walletAddress: this.multisigAddress,
         blockId: block.id
       });
       for (let txn of newOutboundTxns) {
-        let recentNonceKey = this._computeTradeId(txn);
-        this.recentNoncesMap.set(recentNonceKey, BigInt(txn.nonce));
+        this.recentNoncesMap.set(txn.id, BigInt(txn.nonce));
       }
     }
   }
@@ -138,43 +94,39 @@ class LiskChainCrypto {
   // 2. The publicKey corresponds to the signature.
   async verifyTransactionSignature(transaction, signaturePacket) {
     let { signature: signatureToVerify, publicKey, signerAddress } = signaturePacket;
-    let publicKeyBuffer = toBuffer(publicKey);
-    let expectedAddress = liskCryptography.getBase32AddressFromAddress(
-      liskCryptography.getAddressFromPublicKey(publicKeyBuffer)
-    );
+    let expectedAddress = Identities.Address.fromPublicKey(publicKey);
+
     if (signerAddress !== expectedAddress) {
       return false;
     }
 
-    let liskTxn = {
-      moduleID: transaction.moduleID,
-      assetID: transaction.assetID,
-      fee: BigInt(transaction.fee),
-      asset: {
-        amount: BigInt(transaction.amount),
-        recipientAddress: liskCryptography.getAddressFromBase32Address(transaction.recipientAddress),
-        data: transaction.message
-      },
-      nonce: BigInt(transaction.nonce),
-      senderPublicKey: toBuffer(transaction.senderPublicKey),
-      signatures: [],
-      id: transaction.id
+    let txn = {
+      version: transaction.version,
+      network: transaction.network,
+      id: transaction.id,
+      type: transaction.type,
+      typeGroup: transaction.typeGroup,
+      senderPublicKey: transaction.senderPublicKey,
+      recipientId: transaction.recipientAddress,
+      amount: new Utils.BigNumber(transaction.amount),
+      fee: new Utils.BigNumber(transaction.fee),
+      expiration: transaction.expiration,
+      nonce: new Utils.BigNumber(transaction.nonce),
+      vendorField: transaction.message,
+      signatures: []
     };
 
-    let txnBuffer = this.apiClient.transaction.encode(liskTxn);
-    let transactionWithNetworkIdBuffer = Buffer.concat([this.networkIdBytes, txnBuffer]);
+    let txnHash = Transactions.Utils.toHash(txn, {
+      excludeSignature: true,
+      excludeSecondSignature: true,
+      excludeMultiSignature: true,
+    });
 
-    return liskCryptography.verifyData(
-      transactionWithNetworkIdBuffer,
-      toBuffer(signatureToVerify),
-      publicKeyBuffer
-    );
+    return Crypto.Hash.verifySchnorr(txnHash, (signatureToVerify || '').slice(2, 130), publicKey);
   }
 
   async prepareTransaction(transactionData) {
-    try {
-      liskCryptography.validateBase32Address(transactionData.recipientAddress);
-    } catch (error) {
+    if (!Identities.Address.validate(transactionData.recipientAddress)) {
       throw new Error(
         'Failed to prepare the transaction because the recipientAddress was invalid'
       );
@@ -182,70 +134,51 @@ class LiskChainCrypto {
 
     let nonce = this._getNextNonce(transactionData);
 
-    let txnData = {
-      moduleID: 2,
-      assetID: 0,
-      fee: BigInt(transactionData.fee),
-      asset: {
-        amount: BigInt(transactionData.amount),
-        recipientAddress: liskCryptography.getAddressFromBase32Address(transactionData.recipientAddress),
-        data: ''
-      },
-      nonce,
-      senderPublicKey: this.multisigWalletPublicKey,
-      signatures: []
-    };
-    if (transactionData.message != null) {
-      txnData.asset.data = transactionData.message;
-    }
+    // Needs to be set to a height which supports version 2 transactions.
+    Managers.configManager.setHeight(20000000);
 
-    let signedTxn = liskTransactions.signMultiSignatureTransaction(
-      this.transferAssetSchema,
-      txnData,
-      this.networkIdBytes,
-      this.passphrase,
-      this.multisigWalletKeys
-    );
+    let transferBuilder = Transactions.BuilderFactory.transfer();
 
-    liskTransactions.signMultiSignatureTransaction(this.transferAssetSchema, signedTxn, this.networkIdBytes, this.sharedPassphrase, this.multisigWalletKeys);
-    liskTransactions.signMultiSignatureTransaction(this.transferAssetSchema, signedTxn, this.networkIdBytes, this.passphrase, this.multisigWalletKeys);
+    let preparedTxn = transferBuilder
+      .version(2)
+      .nonce(nonce)
+      .amount(transactionData.amount)
+      .fee(transactionData.fee)
+      .senderPublicKey(this.multisigPublicKey)
+      .recipientId(transactionData.recipientAddress)
+      .timestamp(transactionData.timestamp)
+      .vendorField(transactionData.message || '')
+      .build();
 
-    let { address: signerAddress, publicKey: signerPublicKey } = liskCryptography.getAddressAndPublicKeyFromPassphrase(this.passphrase);
-
-    let nonceString = signedTxn.nonce.toString();
-
-    let preparedTxn = {
-      id: computeDEXTransactionId(this.multisigWalletAddressBase32, nonceString),
-      message: signedTxn.asset.data,
-      amount: signedTxn.asset.amount.toString(),
-      timestamp: transactionData.timestamp,
-      senderAddress: this.multisigWalletAddressBase32,
-      recipientAddress: liskCryptography.getBase32AddressFromAddress(signedTxn.asset.recipientAddress),
-      signatures: [],
-      moduleID: signedTxn.moduleID,
-      assetID: signedTxn.assetID,
-      fee: signedTxn.fee.toString(),
-      nonce: nonceString,
-      senderPublicKey: bufferToString(signedTxn.senderPublicKey)
-    };
+    let signature = Transactions.Signer.multiSign(preparedTxn.data, {
+      publicKey: this.memberPublicKey,
+      privateKey: this.memberPrivateKey,
+    }, this.memberMultisigIndex);
 
     // The signature needs to be an object with a signerAddress property, the other
     // properties are flexible and depend on the requirements of the underlying blockchain.
     let multisigTxnSignature = {
-      signerAddress: liskCryptography.getBase32AddressFromAddress(signerAddress),
-      publicKey: bufferToString(signerPublicKey),
-      signature: bufferToString(signedTxn.signatures.find(sigBuffer => sigBuffer.byteLength))
+      signerAddress: this.memberAddress,
+      publicKey: this.memberPublicKey,
+      signature
     };
 
-    return {transaction: preparedTxn, signature: multisigTxnSignature};
-  }
+    preparedTxn.data.senderAddress = this.multisigAddress;
+    preparedTxn.data.recipientAddress = preparedTxn.data.recipientId;
+    preparedTxn.data.amount = preparedTxn.data.amount.toString();
+    preparedTxn.data.fee = preparedTxn.data.fee.toString();
+    preparedTxn.data.message = preparedTxn.data.vendorField || '';
+    preparedTxn.data.nonce = preparedTxn.data.nonce.toString();
+    preparedTxn.data.signatures = [];
 
-  _computeTradeId(transactionData) {
-    return `${transactionData.recipientAddress},${transactionData.message}`;
+    delete preparedTxn.data.recipientId;
+    delete preparedTxn.data.vendorField;
+
+    return {transaction: preparedTxn.data, signature: multisigTxnSignature};
   }
 
   _getNextNonce(transactionData) {
-    let tradeId = this._computeTradeId(transactionData);
+    let tradeId = transactionData.id;
     let existingNonce = this.recentNoncesMap.get(tradeId);
 
     if (existingNonce == null) {
@@ -268,4 +201,4 @@ async function wait(duration) {
   });
 }
 
-module.exports = LiskChainCrypto;
+module.exports = ArkChainCrypto;

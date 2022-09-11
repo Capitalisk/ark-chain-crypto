@@ -1,7 +1,7 @@
 {
-  "name": "lisk-v3-chain-crypto",
+  "name": "ark-chain-crypto",
   "version": "2.0.0",
-  "description": "LDEX ChainCrypto plugin for Lisk and Leasehold",
+  "description": "LDEX ChainCrypto plugin for Ark and its forks",
   "main": "index.js",
   "directories": {
     "test": "test"
@@ -11,23 +11,22 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Leasehold/lisk-chain-crypto.git"
+    "url": "git+https://github.com/Capitalisk/ark-chain-crypto.git"
   },
   "keywords": [
-    "lisk",
+    "ark",
     "dex",
-    "leasehold",
+    "capitalisk",
     "crypto"
   ],
   "author": "Jonathan Gros-Dubois",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Leasehold/lisk-chain-crypto/issues"
+    "url": "https://github.com/Capitalisk/ark-chain-crypto/issues"
   },
-  "homepage": "https://github.com/Leasehold/lisk-chain-crypto#readme",
+  "homepage": "https://github.com/Capitalisk/ark-chain-crypto#readme",
   "dependencies": {
-    "@liskhq/lisk-client": "^5.1.3",
-    "lisk-v3-ws-client-manager": "^1.0.4"
+    "@arkecosystem/crypto": "^3.5.2"
   },
   "devDependencies": {
     "mocha": "^8.2.1"
