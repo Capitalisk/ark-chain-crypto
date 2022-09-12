@@ -21,47 +21,9 @@ class Channel {
           timestamp: 10000000
         };
       },
-      getBlocksBetweenHeights: (params) => {
-        if (params.fromHeight >= 12) {
-          return [];
-        }
-        return [
-          {
-            height: 10
-          },
-          {
-            height: 11
-          },
-          {
-            height: 12
-          }
-        ];
-      },
       getOutboundTransactions: () => {
-        return [
-          {
-            nonce: '3'
-          },
-          {
-            nonce: '2'
-          },
-          {
-            nonce: '1'
-          }
-        ];
+        return [];
       },
-      getOutboundTransactionsFromBlock: () => {
-        return [
-          {
-            id: '2ae4388f094b3d08ec11702a90fefd36bbb48b6d3eaef22db7882636e539f962',
-            nonce: '2'
-          },
-          {
-            id: '5aa69e2eee138aa8e5e9e0c4fbee773db9b131ccdf0957368ce335bbaee373e4',
-            nonce: '3'
-          }
-        ];
-      }
     };
   }
 
