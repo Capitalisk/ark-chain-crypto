@@ -49,7 +49,10 @@ class ArkChainCrypto {
       }
       oldOutboundTxns.sort((a, b) => Number(BigInt(b.nonce) - BigInt(a.nonce)));
       for (let txn of oldOutboundTxns) {
-        if (txn.height <= lastProcessedHeight) {
+        let currentBlock = await this.channel.invoke(`${this.moduleAlias}:getBlock`, {
+          blockId: txn.blockId
+        });
+        if (currentBlock.height <= lastProcessedHeight) {
           highestNonceTransaction = txn;
           break;
         }
@@ -79,6 +82,9 @@ class ArkChainCrypto {
     } else {
       this.nonceIndex = this.initialAccountNonce;
     }
+    this.logger.debug(
+      `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
+    );
   }
 
   // This method checks that:
