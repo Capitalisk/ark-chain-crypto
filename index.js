@@ -3,7 +3,7 @@ const { Transactions, Identities, Crypto, Managers, Utils } = require('@arkecosy
 const MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
 class ArkChainCrypto {
-  constructor({chainOptions}) {
+  constructor({chainOptions, logger}) {
     this.moduleAlias = chainOptions.moduleAlias;
     this.multisigPublicKey = chainOptions.multisigPublicKey;
     this.multisigAddress = Identities.Address.fromPublicKey(this.multisigPublicKey);
@@ -12,6 +12,7 @@ class ArkChainCrypto {
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
     this.nonceIndex = 0n;
+    this.logger = logger;
   }
 
   async load(channel, lastProcessedHeight) {
@@ -34,6 +35,7 @@ class ArkChainCrypto {
 
     let highestNonceTransaction = null;
     let currentTimestamp = lastProcessedBlock.timestamp;
+
     while (true) {
       let oldOutboundTxns = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
         walletAddress: this.multisigAddress,
@@ -54,7 +56,18 @@ class ArkChainCrypto {
       if (highestNonceTransaction) {
         break;
       }
-      currentTimestamp = oldOutboundTxns[oldOutboundTxns.length - 1].timestamp - 1;
+
+      let nextTimestamp = oldOutboundTxns[oldOutboundTxns.length - 1].timestamp;
+      if (nextTimestamp < currentTimestamp) {
+        currentTimestamp = nextTimestamp;
+      } else {
+        this.logger.error(
+          `Failed to fetch some transactions at timestamp ${
+            currentTimestamp
+          } while resetting the Ark ChainCrypto DEX plugin - Transaction nonces may be incorrect`
+        );
+        currentTimestamp--;
+      }
       if (currentTimestamp < 0) {
         break;
       }
