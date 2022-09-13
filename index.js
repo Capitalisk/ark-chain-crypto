@@ -1,6 +1,6 @@
 const { Transactions, Identities, Crypto, Managers, Utils } = require('@arkecosystem/crypto');
 
-const MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
+const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
@@ -11,6 +11,7 @@ class ArkChainCrypto {
     this.memberAddress = Identities.Address.fromPassphrase(this.passphrase);
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
+    this.maxTransactionsPerTimestamp = chainOptions.maxTransactionsPerTimestamp || DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP;
     this.nonceIndex = 0n;
     this.logger = logger;
   }
@@ -40,7 +41,7 @@ class ArkChainCrypto {
       let oldOutboundTxns = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
         walletAddress: this.multisigAddress,
         fromTimestamp: currentTimestamp,
-        limit: MAX_TRANSACTIONS_PER_TIMESTAMP,
+        limit: this.maxTransactionsPerTimestamp,
         order: 'desc'
       });
       if (!oldOutboundTxns.length) {
