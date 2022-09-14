@@ -18,6 +18,13 @@ describe('DEX (ChainCrypto) API tests', async () => {
         passphrase: 'tell sun crazy time creek carbon cloud various turtle leisure cactus melody',
         keyIndexDirPath: './test/data/',
         rpcURL: 'ws://216.128.135.183:8080/ws'
+      },
+      logger: {
+        info: () => {},
+        log: () => {},
+        debug: () => {},
+        warn: () => {},
+        error: () => {}
       }
     };
     channel = new Channel();

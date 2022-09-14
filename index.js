@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Transactions, Identities, Crypto, Managers, Utils } = require('@arkecosystem/crypto');
 
 const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
@@ -32,7 +33,7 @@ class ArkChainCrypto {
   async reset(lastProcessedHeight) {
     // Needs to be set to a height which supports version 2 transactions.
     Managers.configManager.setHeight(20000000);
-    
+
     let lastProcessedBlock = await this.channel.invoke(`${this.moduleAlias}:getBlockAtHeight`, {
       height: lastProcessedHeight
     });
@@ -104,7 +105,7 @@ class ArkChainCrypto {
     let txn = {
       version: transaction.version,
       network: transaction.network,
-      id: transaction.id,
+      id: transaction.originalId,
       type: transaction.type,
       typeGroup: transaction.typeGroup,
       senderPublicKey: transaction.senderPublicKey,
@@ -161,18 +162,27 @@ class ArkChainCrypto {
       signature
     };
 
+    preparedTxn.data.originalId = preparedTxn.data.id;
     preparedTxn.data.senderAddress = this.multisigAddress;
     preparedTxn.data.recipientAddress = preparedTxn.data.recipientId;
     preparedTxn.data.amount = preparedTxn.data.amount.toString();
     preparedTxn.data.fee = preparedTxn.data.fee.toString();
     preparedTxn.data.message = preparedTxn.data.vendorField || '';
     preparedTxn.data.nonce = preparedTxn.data.nonce.toString();
+    preparedTxn.data.id = this.computeDEXTransactionId(
+      preparedTxn.data.senderAddress,
+      preparedTxn.data.nonce
+    );
     preparedTxn.data.signatures = [];
 
     delete preparedTxn.data.recipientId;
     delete preparedTxn.data.vendorField;
 
     return {transaction: preparedTxn.data, signature: multisigTxnSignature};
+  }
+
+  computeDEXTransactionId(senderAddress, nonce) {
+    return crypto.createHash('sha256').update(`${senderAddress}-${nonce}`).digest('hex');
   }
 }
 
