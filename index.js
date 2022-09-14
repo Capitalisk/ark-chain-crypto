@@ -30,6 +30,9 @@ class ArkChainCrypto {
   async unload() {}
 
   async reset(lastProcessedHeight) {
+    // Needs to be set to a height which supports version 2 transactions.
+    Managers.configManager.setHeight(20000000);
+    
     let lastProcessedBlock = await this.channel.invoke(`${this.moduleAlias}:getBlockAtHeight`, {
       height: lastProcessedHeight
     });
@@ -131,9 +134,6 @@ class ArkChainCrypto {
     }
 
     let nonce = this.nonceIndex++;
-
-    // Needs to be set to a height which supports version 2 transactions.
-    Managers.configManager.setHeight(20000000);
 
     let transferBuilder = Transactions.BuilderFactory.transfer();
 
