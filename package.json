@@ -26,7 +26,7 @@
   },
   "homepage": "https://github.com/Capitalisk/ark-chain-crypto#readme",
   "dependencies": {
-    "@arkecosystem/crypto": "^3.5.2"
+    "capitalisk-ark-crypto": "^3.5.2"
   },
   "devDependencies": {
     "mocha": "^8.2.1"

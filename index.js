@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { Transactions, Identities, Crypto, Managers, Utils } = require('@arkecosystem/crypto');
+const { Transactions, Identities, Crypto, Managers, Utils } = require('capitalisk-ark-crypto');
 
 const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
