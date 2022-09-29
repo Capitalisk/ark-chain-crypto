@@ -88,21 +88,22 @@ class ArkChainCrypto {
       );
     }
 
-    let nextNonceIndex = this.nonceIndex + 1n;
+    let currentNonceIndex = ++this.nonceIndex;
     let nonce;
+
     if (this.lastTimestamp === transactionData.timestamp) {
       // Optimization for when there are multiple transactions derived from the same
       // block (based on timestamp); in this case, it is not necessary to re-fetch
       // the last transaction nonce from the last block.
-      nonce = nextNonceIndex;
+      nonce = currentNonceIndex;
     } else {
+      this.lastTimestamp = transactionData.timestamp;
       let lastOutboundTransaction = await this.getLastOutboundTransaction(transactionData.timestamp);
 
       nonce = (lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce) + 1n;
-      if (nonce < nextNonceIndex) {
-        nonce = nextNonceIndex;
+      if (nonce < currentNonceIndex) {
+        nonce = currentNonceIndex;
       }
-      this.lastTimestamp = transactionData.timestamp;
     }
 
     let transferBuilder = Transactions.BuilderFactory.transfer();
@@ -146,8 +147,6 @@ class ArkChainCrypto {
 
     delete preparedTxn.data.recipientId;
     delete preparedTxn.data.vendorField;
-
-    this.nonceIndex = nonce;
 
     return {transaction: preparedTxn.data, signature: multisigTxnSignature};
   }
