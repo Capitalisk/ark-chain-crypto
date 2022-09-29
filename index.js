@@ -13,7 +13,6 @@ class ArkChainCrypto {
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
     this.maxTransactionsPerTimestamp = chainOptions.maxTransactionsPerTimestamp || DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP;
-    this.nonceIndex = 0n;
     this.logger = logger;
   }
 
@@ -25,67 +24,22 @@ class ArkChainCrypto {
     this.initialAccountNonce = BigInt(account.nonce);
     this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
     this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
+
+    // Needs to be set to a height which supports version 2 transactions.
+    Managers.configManager.setHeight(20000000);
     await this.reset(lastProcessedHeight);
   }
 
   async unload() {}
 
   async reset(lastProcessedHeight) {
-    // Needs to be set to a height which supports version 2 transactions.
-    Managers.configManager.setHeight(20000000);
-
     let lastProcessedBlock = await this.channel.invoke(`${this.moduleAlias}:getBlockAtHeight`, {
       height: lastProcessedHeight
     });
 
-    let highestNonceTransaction = null;
-    let currentTimestamp = lastProcessedBlock.timestamp;
+    let lastOutboundTransaction = await this.getLastOutboundTransaction(lastProcessedBlock.timestamp);
+    this.nonceIndex = lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce;
 
-    while (true) {
-      let oldOutboundTxns = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
-        walletAddress: this.multisigAddress,
-        fromTimestamp: currentTimestamp,
-        limit: this.maxTransactionsPerTimestamp,
-        order: 'desc'
-      });
-      if (!oldOutboundTxns.length) {
-        break;
-      }
-      oldOutboundTxns.sort((a, b) => Number(BigInt(b.nonce) - BigInt(a.nonce)));
-      for (let txn of oldOutboundTxns) {
-        let currentBlock = await this.channel.invoke(`${this.moduleAlias}:getBlock`, {
-          blockId: txn.blockId
-        });
-        if (currentBlock.height <= lastProcessedHeight) {
-          highestNonceTransaction = txn;
-          break;
-        }
-      }
-      if (highestNonceTransaction) {
-        break;
-      }
-
-      let nextTimestamp = oldOutboundTxns[oldOutboundTxns.length - 1].timestamp;
-      if (nextTimestamp < currentTimestamp) {
-        currentTimestamp = nextTimestamp;
-      } else {
-        this.logger.error(
-          `Failed to fetch some transactions at timestamp ${
-            currentTimestamp
-          } while resetting the Ark ChainCrypto DEX plugin - Transaction nonces may be incorrect`
-        );
-        currentTimestamp--;
-      }
-      if (currentTimestamp < 0) {
-        break;
-      }
-    }
-
-    if (highestNonceTransaction) {
-      this.nonceIndex = BigInt(highestNonceTransaction.nonce) + 1n;
-    } else {
-      this.nonceIndex = this.initialAccountNonce;
-    }
     this.logger.debug(
       `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
     );
@@ -134,7 +88,22 @@ class ArkChainCrypto {
       );
     }
 
-    let nonce = this.nonceIndex++;
+    let nextNonceIndex = this.nonceIndex + 1n;
+    let nonce;
+    if (this.lastTimestamp === transactionData.timestamp) {
+      // Optimization for when there are multiple transactions derived from the same
+      // block (based on timestamp); in this case, it is not necessary to re-fetch
+      // the last transaction nonce from the last block.
+      nonce = nextNonceIndex;
+    } else {
+      let lastOutboundTransaction = await this.getLastOutboundTransaction(transactionData.timestamp);
+
+      nonce = (lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce) + 1n;
+      if (nonce < nextNonceIndex) {
+        nonce = nextNonceIndex;
+      }
+      this.lastTimestamp = transactionData.timestamp;
+    }
 
     let transferBuilder = Transactions.BuilderFactory.transfer();
 
@@ -178,7 +147,20 @@ class ArkChainCrypto {
     delete preparedTxn.data.recipientId;
     delete preparedTxn.data.vendorField;
 
+    this.nonceIndex = nonce;
+
     return {transaction: preparedTxn.data, signature: multisigTxnSignature};
+  }
+
+  async getLastOutboundTransaction(fromTimestamp) {
+    return (
+      await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
+        walletAddress: this.multisigAddress,
+        fromTimestamp,
+        limit: 1,
+        order: 'desc'
+      })
+    )[0];
   }
 
   computeDEXTransactionId(senderAddress, nonce) {
