@@ -5,6 +5,9 @@ const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
+    // Needs to be set to a height which supports version 2 transactions.
+    Managers.configManager.setHeight(20000000);
+
     this.moduleAlias = chainOptions.moduleAlias;
     this.multisigPublicKey = chainOptions.multisigPublicKey;
     this.multisigAddress = Identities.Address.fromPublicKey(this.multisigPublicKey);
@@ -25,8 +28,6 @@ class ArkChainCrypto {
     this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
     this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
 
-    // Needs to be set to a height which supports version 2 transactions.
-    Managers.configManager.setHeight(20000000);
     await this.reset(lastProcessedHeight);
   }
 
