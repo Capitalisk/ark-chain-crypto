@@ -5,6 +5,7 @@ const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
+    Managers.configManager.setFromPreset(chainOptions.env || 'devnet');
     // Needs to be set to a height which supports version 2 transactions.
     Managers.configManager.setHeight(20000000);
 
