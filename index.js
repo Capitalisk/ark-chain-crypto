@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const { Transactions, Identities, Crypto, Managers, Utils } = require('capitalisk-ark-crypto');
 
-const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
@@ -16,18 +15,17 @@ class ArkChainCrypto {
     this.memberAddress = Identities.Address.fromPassphrase(this.passphrase);
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
-    this.maxTransactionsPerTimestamp = chainOptions.maxTransactionsPerTimestamp || DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP;
     this.logger = logger;
   }
 
   async load(channel, lastProcessedHeight) {
     this.channel = channel;
-    let account = await this.channel.invoke(`${this.moduleAlias}:getAccount`, {
-      walletAddress: this.multisigAddress
-    });
+    let account = await this.getAccount();
     this.initialAccountNonce = BigInt(account.nonce);
     this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
     this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
+    this.lastBlockTransactionId = null;
+    this.lastBlockTransactionNonce = null;
 
     await this.reset(lastProcessedHeight);
   }
@@ -39,8 +37,7 @@ class ArkChainCrypto {
       height: lastProcessedHeight
     });
 
-    let lastOutboundTransaction = await this.getLastOutboundTransaction(lastProcessedBlock.timestamp);
-    this.nonceIndex = lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce;
+    this.nonceIndex = this.getLastOutboundTransactionNonce(lastProcessedBlock.timestamp);
 
     this.logger.debug(
       `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
@@ -89,22 +86,41 @@ class ArkChainCrypto {
         'Failed to prepare the transaction because the recipientAddress was invalid'
       );
     }
+    let nonce = ++this.nonceIndex;
+    let transactionId = this.computeDEXTransactionId(
+      this.multisigAddress,
+      nonce.toString()
+    );
 
-    let currentNonceIndex = ++this.nonceIndex;
-    let nonce;
-
-    if (this.lastTimestamp === transactionData.timestamp) {
-      // Optimization for when there are multiple transactions derived from the same
-      // block (based on timestamp); in this case, it is not necessary to re-fetch
-      // the last transaction nonce from the last block.
-      nonce = currentNonceIndex;
-    } else {
+    if (this.lastTimestamp !== transactionData.timestamp) {
+      // Only attempt to correct the nonceIndex at most once per timestamp
+      // for the first transaction in the block.
       this.lastTimestamp = transactionData.timestamp;
-      let lastOutboundTransaction = await this.getLastOutboundTransaction(transactionData.timestamp);
 
-      nonce = (lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce) + 1n;
-      if (nonce < currentNonceIndex) {
-        nonce = currentNonceIndex;
+      // If a transaction id has already been processed before (e.g. because of
+      // an error during block processing), roll back the nonce to its previous value.
+      if (transactionId === this.lastBlockTransactionId) {
+        nonce = this.lastBlockTransactionNonce;
+        this.nonceIndex = nonce;
+      } else {
+        this.lastBlockTransactionNonce = nonce;
+      }
+      this.lastBlockTransactionId = transactionId;
+
+      // If the current nonce is lower than expected, exit and restart the module.
+      // This will allow the module to resync from an earlier safe height and
+      // will ensure that no invalid pending transactions will be in the queue.
+      let lastOutboundTransactionNonce = await this.getLastOutboundTransactionNonce(transactionData.timestamp);
+      let expectedNextNonce = lastOutboundTransactionNonce + 1n;
+      if (expectedNextNonce > this.nonceIndex) {
+        this.logger.error(
+          `Ark ChainCrypto nonce of ${
+            this.nonceIndex
+          } was less than the expected value of ${
+            expectedNextNonce
+          }`
+        );
+        process.exit(1);
       }
     }
 
@@ -141,16 +157,19 @@ class ArkChainCrypto {
     preparedTxn.data.fee = preparedTxn.data.fee.toString();
     preparedTxn.data.message = preparedTxn.data.vendorField || '';
     preparedTxn.data.nonce = preparedTxn.data.nonce.toString();
-    preparedTxn.data.id = this.computeDEXTransactionId(
-      preparedTxn.data.senderAddress,
-      preparedTxn.data.nonce
-    );
+    preparedTxn.data.id = transactionId;
     preparedTxn.data.signatures = [];
 
     delete preparedTxn.data.recipientId;
     delete preparedTxn.data.vendorField;
 
     return {transaction: preparedTxn.data, signature: multisigTxnSignature};
+  }
+
+  async getAccount() {
+    return this.channel.invoke(`${this.moduleAlias}:getAccount`, {
+      walletAddress: this.multisigAddress
+    });
   }
 
   async getLastOutboundTransaction(fromTimestamp) {
@@ -162,6 +181,11 @@ class ArkChainCrypto {
         order: 'desc'
       })
     )[0];
+  }
+
+  async getLastOutboundTransactionNonce(fromTimestamp) {
+    let lastOutboundTransaction = await this.getLastOutboundTransaction(fromTimestamp);
+    return lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce;
   }
 
   computeDEXTransactionId(senderAddress, nonce) {
