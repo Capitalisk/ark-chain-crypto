@@ -111,13 +111,13 @@ class ArkChainCrypto {
       // This will allow the module to resync from an earlier safe height and
       // will ensure that no invalid pending transactions will be in the queue.
       let lastOutboundTransactionNonce = await this.getLastOutboundTransactionNonce(transactionData.timestamp);
-      let expectedNextNonce = lastOutboundTransactionNonce + 1n;
-      if (expectedNextNonce > this.nonceIndex) {
+      let expectedMinNextNonce = lastOutboundTransactionNonce + 1n;
+      if (expectedMinNextNonce > this.nonceIndex) {
         this.logger.error(
           `Ark ChainCrypto nonce of ${
             this.nonceIndex
-          } was less than the expected value of ${
-            expectedNextNonce
+          } was less than the minimum expected value of ${
+            expectedMinNextNonce
           }`
         );
         process.exit(1);
