@@ -24,8 +24,6 @@ class ArkChainCrypto {
     this.initialAccountNonce = BigInt(account.nonce);
     this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
     this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
-    this.lastBlockTransactionId = null;
-    this.lastBlockTransactionNonce = null;
 
     await this.reset(lastProcessedHeight);
   }
@@ -37,7 +35,7 @@ class ArkChainCrypto {
       height: lastProcessedHeight
     });
 
-    this.nonceIndex = this.getLastOutboundTransactionNonce(lastProcessedBlock.timestamp);
+    this.nonceIndex = await this.getLastOutboundTransactionNonce(lastProcessedBlock.timestamp);
 
     this.logger.debug(
       `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
@@ -86,10 +84,11 @@ class ArkChainCrypto {
         'Failed to prepare the transaction because the recipientAddress was invalid'
       );
     }
-    let nonce = ++this.nonceIndex;
+    this.nonceIndex++;
+
     let transactionId = this.computeDEXTransactionId(
       this.multisigAddress,
-      nonce.toString()
+      this.nonceIndex.toString()
     );
 
     if (this.lastTimestamp !== transactionData.timestamp) {
@@ -97,30 +96,10 @@ class ArkChainCrypto {
       // for the first transaction in the block.
       this.lastTimestamp = transactionData.timestamp;
 
-      // If a transaction id has already been processed before (e.g. because of
-      // an error during block processing), roll back the nonce to its previous value.
-      if (transactionId === this.lastBlockTransactionId) {
-        nonce = this.lastBlockTransactionNonce;
-        this.nonceIndex = nonce;
-      } else {
-        this.lastBlockTransactionNonce = nonce;
-      }
-      this.lastBlockTransactionId = transactionId;
-
-      // If the current nonce is lower than expected, exit and restart the module.
-      // This will allow the module to resync from an earlier safe height and
-      // will ensure that no invalid pending transactions will be in the queue.
       let lastOutboundTransactionNonce = await this.getLastOutboundTransactionNonce(transactionData.timestamp);
       let expectedMinNextNonce = lastOutboundTransactionNonce + 1n;
       if (expectedMinNextNonce > this.nonceIndex) {
-        this.logger.error(
-          `Ark ChainCrypto nonce of ${
-            this.nonceIndex
-          } was less than the minimum expected value of ${
-            expectedMinNextNonce
-          }`
-        );
-        process.exit(1);
+        this.nonceIndex = expectedMinNextNonce;
       }
     }
 
@@ -128,7 +107,7 @@ class ArkChainCrypto {
 
     let preparedTxn = transferBuilder
       .version(2)
-      .nonce(nonce)
+      .nonce(this.nonceIndex)
       .amount(transactionData.amount)
       .fee(transactionData.fee)
       .senderPublicKey(this.multisigPublicKey)
