@@ -86,11 +86,6 @@ class ArkChainCrypto {
     }
     this.nonceIndex++;
 
-    let transactionId = this.computeDEXTransactionId(
-      this.multisigAddress,
-      this.nonceIndex.toString()
-    );
-
     if (this.lastTimestamp !== transactionData.timestamp) {
       // Only attempt to correct the nonceIndex at most once per timestamp
       // for the first transaction in the block.
@@ -136,7 +131,10 @@ class ArkChainCrypto {
     preparedTxn.data.fee = preparedTxn.data.fee.toString();
     preparedTxn.data.message = preparedTxn.data.vendorField || '';
     preparedTxn.data.nonce = preparedTxn.data.nonce.toString();
-    preparedTxn.data.id = transactionId;
+    preparedTxn.data.id = this.computeDEXTransactionId(
+      preparedTxn.data.senderAddress,
+      preparedTxn.data.nonce
+    );
     preparedTxn.data.signatures = [];
 
     delete preparedTxn.data.recipientId;
