@@ -105,7 +105,7 @@ class ArkChainCrypto {
           }
           this.nonceIndex = BigInt(nextTransaction.nonce) + 1n;
           this.logger.debug(`ChainCrypto nonce was updated to ${this.nonceIndex} after calibration`);
-          currentTimestamp = nextTransaction.timestamp + 1;
+          currentTimestamp = nextTransaction.timestamp;
         }
         if (
           foundMatchingTransaction ||
