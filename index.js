@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { Transactions, Identities, Crypto, Managers, Utils } = require('capitalisk-ark-crypto');
-
+const MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
+const FETCH_RETRY_DELAY = 5000;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
@@ -36,6 +37,7 @@ class ArkChainCrypto {
     });
 
     this.nonceIndex = await this.getLastOutboundTransactionNonce(lastProcessedBlock.timestamp);
+    this.isNonceCalibrated = false;
 
     this.logger.debug(
       `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
@@ -86,16 +88,33 @@ class ArkChainCrypto {
     }
     this.nonceIndex++;
 
-    if (this.lastTimestamp !== transactionData.timestamp) {
-      // Only attempt to correct the nonceIndex at most once per timestamp
-      // for the first transaction in the block.
-      this.lastTimestamp = transactionData.timestamp;
+    let transactionMessage = transactionData.message || '';
 
-      let lastOutboundTransactionNonce = await this.getLastOutboundTransactionNonce(transactionData.timestamp);
-      let expectedMinNextNonce = lastOutboundTransactionNonce + 1n;
-      if (expectedMinNextNonce > this.nonceIndex) {
-        this.nonceIndex = expectedMinNextNonce;
+    if (!this.isNonceCalibrated) {
+      // Look ahead to see if there is an existing record for this transaction;
+      // if not, increment the nonceIndex until a match is found or until we run
+      // out of transactions.
+      let currentTimestamp = transactionData.timestamp;
+      while (true) {
+        let foundMatchingTransaction = false;
+        let nextOutboundTransactions = await this.getNextOutboundTransactions(currentTimestamp);
+        for (let nextTransaction of nextOutboundTransactions) {
+          if (nextTransaction.message === transactionMessage) {
+            foundMatchingTransaction = true;
+            break;
+          }
+          this.nonceIndex = BigInt(nextTransaction.nonce) + 1n;
+          this.logger.debug(`ChainCrypto nonce was updated to ${this.nonceIndex} after calibration`);
+          currentTimestamp = nextTransaction.timestamp + 1;
+        }
+        if (
+          foundMatchingTransaction ||
+          nextOutboundTransactions.length < MAX_TRANSACTIONS_PER_TIMESTAMP
+        ) {
+          break;
+        }
       }
+      this.isNonceCalibrated = true;
     }
 
     let transferBuilder = Transactions.BuilderFactory.transfer();
@@ -108,7 +127,7 @@ class ArkChainCrypto {
       .senderPublicKey(this.multisigPublicKey)
       .recipientId(transactionData.recipientAddress)
       .timestamp(transactionData.timestamp)
-      .vendorField(transactionData.message || '')
+      .vendorField(transactionMessage)
       .build();
 
     let signature = Transactions.Signer.multiSign(preparedTxn.data, {
@@ -150,14 +169,43 @@ class ArkChainCrypto {
   }
 
   async getLastOutboundTransaction(fromTimestamp) {
-    return (
-      await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
-        walletAddress: this.multisigAddress,
-        fromTimestamp,
-        limit: 1,
-        order: 'desc'
-      })
-    )[0];
+    let i = 0;
+    while (true) {
+      i++;
+      try {
+        let transactions = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
+          walletAddress: this.multisigAddress,
+          fromTimestamp,
+          limit: 1,
+          order: 'desc'
+        });
+        return transactions[0];
+      } catch (error) {
+        this.logger.warn(`Failed to fetch last outbound transaction because of error: ${error.message}`);
+        this.logger.debug(`Retry fetching last outbound transaction: Attempt #${i}`);
+        await wait(FETCH_RETRY_DELAY);
+      }
+    }
+  }
+
+  async getNextOutboundTransactions(fromTimestamp) {
+    let i = 0;
+    while (true) {
+      i++;
+      try {
+        let transactions = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
+          walletAddress: this.multisigAddress,
+          fromTimestamp,
+          limit: MAX_TRANSACTIONS_PER_TIMESTAMP,
+          order: 'asc'
+        });
+        return transactions;
+      } catch (error) {
+        this.logger.warn(`Failed to fetch next outbound transactions because of error: ${error.message}`);
+        this.logger.debug(`Retry fetching next outbound transactions: Attempt #${i}`);
+        await wait(FETCH_RETRY_DELAY);
+      }
+    }
   }
 
   async getLastOutboundTransactionNonce(fromTimestamp) {
