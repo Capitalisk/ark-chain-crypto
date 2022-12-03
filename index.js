@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { Transactions, Identities, Crypto, Managers, Utils } = require('capitalisk-ark-crypto');
 const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
-const FETCH_RETRY_DELAY = 5000;
+const DEFAULT_FETCH_RETRY_DELAY = 5000;
 // Approximately 24 hours since each iteration looks ahead 300 blocks and each
 // block is 8 seconds apart.
 const DEFAULT_MAX_CALIBRATION_LOOK_AHEAD = 36;
@@ -18,6 +18,7 @@ class ArkChainCrypto {
     this.passphrase = chainOptions.passphrase;
     this.maxCalibrationLookAhead = chainOptions.maxCalibrationLookAhead || DEFAULT_MAX_CALIBRATION_LOOK_AHEAD;
     this.maxTransactionsPerTimestamp = chainOptions.maxTransactionsPerTimestamp || DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP;
+    this.fetchRetryDelay = chainOptions.fetchRetryDelay || DEFAULT_FETCH_RETRY_DELAY;
     this.memberAddress = Identities.Address.fromPassphrase(this.passphrase);
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
@@ -203,7 +204,7 @@ class ArkChainCrypto {
       } catch (error) {
         this.logger.warn(`Failed to fetch last outbound transaction because of error: ${error.message}`);
         this.logger.debug(`Retry fetching last outbound transaction: Attempt #${i}`);
-        await wait(FETCH_RETRY_DELAY);
+        await wait(this.fetchRetryDelay);
       }
     }
   }
@@ -223,7 +224,7 @@ class ArkChainCrypto {
       } catch (error) {
         this.logger.warn(`Failed to fetch next outbound transactions because of error: ${error.message}`);
         this.logger.debug(`Retry fetching next outbound transactions: Attempt #${i}`);
-        await wait(FETCH_RETRY_DELAY);
+        await wait(this.fetchRetryDelay);
       }
     }
   }
