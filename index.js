@@ -1,7 +1,10 @@
 const crypto = require('crypto');
 const { Transactions, Identities, Crypto, Managers, Utils } = require('capitalisk-ark-crypto');
-const MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
+const DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP = 300;
 const FETCH_RETRY_DELAY = 5000;
+// Approximately 24 hours since each iteration looks ahead 300 blocks and each
+// block is 8 seconds apart.
+const DEFAULT_MAX_CALIBRATION_LOOK_AHEAD = 36;
 
 class ArkChainCrypto {
   constructor({chainOptions, logger}) {
@@ -13,6 +16,8 @@ class ArkChainCrypto {
     this.multisigPublicKey = chainOptions.multisigPublicKey;
     this.multisigAddress = Identities.Address.fromPublicKey(this.multisigPublicKey);
     this.passphrase = chainOptions.passphrase;
+    this.maxCalibrationLookAhead = chainOptions.maxCalibrationLookAhead || DEFAULT_MAX_CALIBRATION_LOOK_AHEAD;
+    this.maxTransactionsPerTimestamp = chainOptions.maxTransactionsPerTimestamp || DEFAULT_MAX_TRANSACTIONS_PER_TIMESTAMP;
     this.memberAddress = Identities.Address.fromPassphrase(this.passphrase);
     this.memberPublicKey = Identities.PublicKey.fromPassphrase(this.passphrase);
     this.memberPrivateKey = Identities.PrivateKey.fromPassphrase(this.passphrase);
@@ -22,7 +27,6 @@ class ArkChainCrypto {
   async load(channel, lastProcessedHeight) {
     this.channel = channel;
     let account = await this.getAccount();
-    this.initialAccountNonce = BigInt(account.nonce);
     this.multisigWalletKeys = account.attributes.multiSignature.publicKeys || [];
     this.memberMultisigIndex = this.multisigWalletKeys.indexOf(this.memberPublicKey);
 
@@ -32,15 +36,11 @@ class ArkChainCrypto {
   async unload() {}
 
   async reset(lastProcessedHeight) {
-    let lastProcessedBlock = await this.channel.invoke(`${this.moduleAlias}:getBlockAtHeight`, {
-      height: lastProcessedHeight
-    });
-
-    this.nonceIndex = await this.getLastOutboundTransactionNonce(lastProcessedBlock.timestamp);
+    this.nonceIndex = null;
     this.isNonceCalibrated = false;
 
     this.logger.debug(
-      `Ark ChainCrypto nonce was reset to ${this.nonceIndex} at height ${lastProcessedHeight}`
+      `Ark ChainCrypto was reset to height ${lastProcessedHeight}`
     );
   }
 
@@ -86,35 +86,55 @@ class ArkChainCrypto {
         'Failed to prepare the transaction because the recipientAddress was invalid'
       );
     }
-    this.nonceIndex++;
 
     let transactionMessage = transactionData.message || '';
 
-    if (!this.isNonceCalibrated) {
+    if (this.isNonceCalibrated) {
+      this.nonceIndex++;
+    } else {
+      let currentTimestamp = transactionData.timestamp;
+
+      let lastOutboundTransactionNonce = await this.getLastOutboundTransactionNonce(currentTimestamp);
+      this.nonceIndex = lastOutboundTransactionNonce + 1n;
+
       // Look ahead to see if there is an existing record for this transaction;
       // if not, increment the nonceIndex until a match is found or until we run
       // out of transactions.
-      let currentTimestamp = transactionData.timestamp;
+      let c = 0;
+      let failedCalibration = false;
       while (true) {
         let foundMatchingTransaction = false;
         let nextOutboundTransactions = await this.getNextOutboundTransactions(currentTimestamp);
         for (let nextTransaction of nextOutboundTransactions) {
           if (nextTransaction.message === transactionMessage) {
+            this.nonceIndex = BigInt(nextTransaction.nonce);
             foundMatchingTransaction = true;
             break;
           }
           this.nonceIndex = BigInt(nextTransaction.nonce) + 1n;
-          this.logger.debug(`ChainCrypto nonce was updated to ${this.nonceIndex} after calibration`);
           currentTimestamp = nextTransaction.timestamp;
         }
         if (
           foundMatchingTransaction ||
-          nextOutboundTransactions.length < MAX_TRANSACTIONS_PER_TIMESTAMP
+          nextOutboundTransactions.length < this.maxTransactionsPerTimestamp
         ) {
           break;
         }
+        if (++c > this.maxCalibrationLookAhead) {
+          failedCalibration = true;
+          break;
+        }
       }
-      this.isNonceCalibrated = true;
+      if (failedCalibration) {
+        throw new Error(
+          `ChainCrypto nonce failed to calibrate because matching transaction was not found for message: ${
+            transactionMessage
+          }`
+        );
+      } else {
+        this.isNonceCalibrated = true;
+        this.logger.debug(`ChainCrypto nonce was calibrated to ${this.nonceIndex}`);
+      }
     }
 
     let transferBuilder = Transactions.BuilderFactory.transfer();
@@ -196,7 +216,7 @@ class ArkChainCrypto {
         let transactions = await this.channel.invoke(`${this.moduleAlias}:getOutboundTransactions`, {
           walletAddress: this.multisigAddress,
           fromTimestamp,
-          limit: MAX_TRANSACTIONS_PER_TIMESTAMP,
+          limit: this.maxTransactionsPerTimestamp,
           order: 'asc'
         });
         return transactions;
@@ -210,7 +230,7 @@ class ArkChainCrypto {
 
   async getLastOutboundTransactionNonce(fromTimestamp) {
     let lastOutboundTransaction = await this.getLastOutboundTransaction(fromTimestamp);
-    return lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : this.initialAccountNonce;
+    return lastOutboundTransaction ? BigInt(lastOutboundTransaction.nonce) : 0n;
   }
 
   computeDEXTransactionId(senderAddress, nonce) {
