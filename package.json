@@ -1,6 +1,6 @@
 {
   "name": "ark-chain-crypto",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "LDEX ChainCrypto plugin for Ark and its forks",
   "main": "index.js",
   "directories": {
