@@ -107,7 +107,10 @@ class ArkChainCrypto {
         let foundMatchingTransaction = false;
         let nextOutboundTransactions = await this.getNextOutboundTransactions(currentTimestamp);
         for (let nextTransaction of nextOutboundTransactions) {
-          if (nextTransaction.message === transactionMessage) {
+          if (
+            nextTransaction.recipientAddress === transactionData.recipientAddress &&
+            nextTransaction.message === transactionMessage
+          ) {
             this.nonceIndex = BigInt(nextTransaction.nonce);
             foundMatchingTransaction = true;
             break;
